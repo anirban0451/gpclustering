@@ -105,3 +105,41 @@ gmm.fromscratch <- function(X, k, logProbs = FALSE){
   return(list(softcluster = r_ic, cluster = apply(r_ic, 1,
                                                   which.max)))
 }
+
+getU = function(vecchia_obj, covmatrix){
+  
+  if(isTRUE(missing(vecchia_obj) || (!is.list(vecchia_obj)))){
+    
+    stop("The variable vecchia_obj is a list of setups which must be provided
+         in order to compute sparse Cholesky factor")
+  }
+  sig.sel = getMatCov(vecchia_obj, cov_matrix)
+  inds = Filter(function(i) !is.na(i), as.vector(t(vecchia_obj$U.prep$revNNarray - 1)))
+  ptrs = c(0, cumsum(apply(vecchia_obj$U.prep$revNNarray, 1, function(r) sum(!is.na(r)))))
+  cov.vals = Filter(function(i) !is.na(i), c(t(sig.sel)))
+  vals = createUcppM(ptrs, inds, cov.vals)
+  LMatrix = Matrix::sparseMatrix(j=inds, p=ptrs, x=vals, index1=FALSE)
+  UMatrix = as.matrix(Matrix::triu(Matrix::t(Matrix::solve(LMatrix, sparse = TRUE))))
+  return(UMatrix)
+}
+
+mvn.pdf.i.ichol <- function(xi, mu, U, logval = TRUE){
+  
+  if(logval == FALSE){
+    val = as.numeric((1/(sqrt( (2*pi)^length(xi))) * prod(diag(U))) * 
+                       exp( - 0.5 * crossprod(crossprod(U, matrix(xi-mu)))))#exp(-(1/2) * t(xi - mu) %*% mvnorm.cov.inv.dup(Sigma) %*% (xi - mu)  ) 
+  }else if(logval == TRUE){
+    
+    val = - 0.5 *as.numeric(crossprod(crossprod(U, matrix(xi-mu))))
+  }
+  
+  return(val)
+}
+
+
+mvn.pdf.vecchia <-function(X, mu, sigma, vecchia_obj, logval = TRUE){
+  
+  Umatrix = getU(vecchia_obj = vecchia_obj, covmatrix = cov_matrix)
+  values = apply(X, 1, function(xi) mvn.pdf.i.ichol(as.numeric(xi), mu, Umatrix, logval = logval))
+  return(values)
+}
