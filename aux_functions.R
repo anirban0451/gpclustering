@@ -63,7 +63,7 @@ mvn.pdf <- function(X, mu, Sigma, logval = TRUE){
   return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigma, logval = logval)))
 }
   
-gmm.fromscratch <- function(X, k){
+gmm.fromscratch <- function(X, k, logProbs = FALSE){
   p <- ncol(X)  # number of parameters
   n <- nrow(X)  # number of observations
   Delta <- 1; iter <- 0; itermax <- 30
@@ -81,7 +81,14 @@ gmm.fromscratch <- function(X, k){
     }
     
     # E-step
-    mvn.c <- sapply(1:k, function(c) mvn.pdf(X, mu[c,], cov[,, c]))
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(X, mu[c,], cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(X, mu[c,], cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - (0.5 * (max(x) + min(x))))))
+    }
     r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
     
     # M-step
