@@ -143,3 +143,42 @@ mvn.pdf.vecchia <-function(X, mu, sigma, vecchia_obj, logval = TRUE){
   values = apply(X, 1, function(xi) mvn.pdf.i.ichol(as.numeric(xi), mu, Umatrix, logval = logval))
   return(values)
 }
+
+gmm.fromscratch.vecchia <- function(X, k, vecchia_obj, logProbs = TRUE){
+  p <- ncol(X)  # number of parameters
+  n <- nrow(X)  # number of observations
+  Delta <- 1; iter <- 0; itermax <- 30
+  while(Delta > 1e-4 && iter <= itermax){
+    # initiation
+    if(iter == 0){
+      km.init <- km.fromscratch(X, k)
+      mu <- km.init$centroid; mu_mem <- mu
+      w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      w <- w/sum(w)
+      cov <- array(dim = c(p, p, k))
+      for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+        1/n * sum((X[km.init$cluster == c, i] - mu[c, i]) *
+                    (X[km.init$cluster == c, j] - mu[c, j]))
+    }
+    
+    # E-step
+    mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(X, mu[c,], cov[,, c], vecchia_obj, logval = logProbs))
+    mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    wt_matrix = t(w*t(mvn.c))
+    
+    r_ic <- wt_matrix / rowSums(wt_matrix)
+    
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+                                                         X)))
+    for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+      1/n_c[c] * sum(r_ic[, c] * (X[, i] - mu[c, i]) * r_ic[, c] *
+                       (X[, j] - mu[c, j]))
+    Delta <- sum((mu - mu_mem)^2)
+    iter <- iter + 1; mu_mem <- mu
+  }
+  return(list(softcluster = r_ic, cluster = apply(r_ic, 1,
+                                                  which.max)))
+}
