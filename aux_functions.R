@@ -44,15 +44,16 @@ mvnorm.cov.inv.dup <- function(Sigma) {
 
 
 #multivariate Gaussian pdf
-mvn.pdf.i <- function(xi, mu, Sigma){
+mvn.pdf.i <- function(xi, mu, InvSigma){
   
  return(1/sqrt( (2*pi)^length(xi) * det(Sigma) ) * 
-          exp(-(1/2) * t(xi - mu) %*% mvnorm.cov.inv(Sigma) 
+          exp(-(1/2) * t(xi - mu) %*% InvSigma 
               %*% (xi - mu)  )) 
 }
 mvn.pdf <- function(X, mu, Sigma){
   
-  return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, Sigma)))
+  InvSigma = mvnorm.cov.inv.dup(Sigma)
+  return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigma)))
 }
   
 gmm.fromscratch <- function(X, k){
