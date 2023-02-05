@@ -34,6 +34,14 @@ mvnorm.cov.inv <- function(Sigma) {
   return(Q %*% Lambda.inv %*% t(Q))
 }
 
+mvnorm.cov.inv.dup <- function(Sigma) {
+  # Eigendecomposition of covariance matrix
+  E <- eigen(Sigma)
+  Lambda.inv.sqrt <- diag(E$values^-0.5)   # square root of diagonal matrix
+  Q <- E$vectors
+  return(tcrossprod(tcrossprod(Q, Lambda.inv.sqrt)))
+}
+
 
 #multivariate Gaussian pdf
 mvn.pdf.i <- function(xi, mu, Sigma){
