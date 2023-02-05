@@ -130,7 +130,7 @@ mvn.pdf.i.ichol <- function(xi, mu, U, logval = TRUE){
                        exp( - 0.5 * crossprod(crossprod(U, matrix(xi-mu)))))#exp(-(1/2) * t(xi - mu) %*% mvnorm.cov.inv.dup(Sigma) %*% (xi - mu)  ) 
   }else if(logval == TRUE){
     
-    val = - 0.5 *as.numeric(crossprod(crossprod(U, matrix(xi-mu))))
+    val = log(diag(U)) - 0.5 *as.numeric(crossprod(crossprod(U, matrix(xi-mu))))
   }
   
   return(val)
