@@ -130,7 +130,7 @@ mvn.pdf.i.ichol <- function(xi, mu, U, logval = TRUE){
                        exp( - 0.5 * crossprod(crossprod(U, matrix(xi-mu)))))#exp(-(1/2) * t(xi - mu) %*% mvnorm.cov.inv.dup(Sigma) %*% (xi - mu)  ) 
   }else if(logval == TRUE){
     
-    val = log(diag(U)) - 0.5 *as.numeric(crossprod(crossprod(U, matrix(xi-mu))))
+    val = sum(log(diag(U))) - 0.5 *as.numeric(crossprod(crossprod(U, matrix(xi-mu))))
   }
   
   return(val)
@@ -163,7 +163,7 @@ gmm.fromscratch.vecchia <- function(X, k, vecchia_obj, logProbs = TRUE){
     
     # E-step
     mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(X, mu[c,], cov[,, c], vecchia_obj, logval = logProbs))
-    mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - ((max(x) + min(x))/2))))
     wt_matrix = t(w*t(mvn.c))
     
     r_ic <- wt_matrix / rowSums(wt_matrix)
