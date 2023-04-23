@@ -232,7 +232,7 @@ elik = function(Ydata, k, w, cov){
     Sigjinv = Matrix::solve(cov[ , , j])
     for(i in 1:N){
       
-      logprobability = p/2 * log(2 * pi * det(Sigjinv)) -
+      logprobability = p/2 * log(det(Sigjinv) / (2 * pi)) -
         0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
       val = val + w[j] * logprobability #has to define
     }
@@ -318,7 +318,7 @@ de_dstdn = function(Ydata, wmat, Sigmaj, l, X, stdn){
   return(val)
 }
 
-gmm.fromscratch.v2 <- function(X, Y, k, logProbs = FALSE, seed = seed, gradlabmda, itern_em,
+gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
                                l_f_interval = seq(0.3, 3, by = 0.1),
                                sig_f_interval = seq(0.5, 3.5, by = 0.1),
                                sig_n_interval = seq(0.5, 3.5, by = 0.1)){
@@ -433,7 +433,7 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = FALSE, seed = seed, gradlabmd
       cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
     }
     
-    el_mplusone = elik(Y, w, k, cov)
+    el_mplusone = elik(Ydata = Y, w = w, k = k, cov = cov)
     Delta <- (el_m - el_mplusone)^2
     itern <- itern + 1;
   }
