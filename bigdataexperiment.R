@@ -31,6 +31,9 @@ matplot(x = x_grid, y = t(sample_collection),
         type = "l", lty = rep(1:2, each =nsamp), 
         col = rep(c("red", "black"), each = nsamp))
 
+##gpclustering
+cl_data = gmm.fromscratch.v2(X = X, Y = sample_collection, k = 2, itern_em = 300)
+
 ##vecchia setup--------------------------------------
 seed = 1234
 set.seed(seed); m = 60
