@@ -232,7 +232,7 @@ elik = function(Ydata, k, r_ic, cov){
     Sigjinv = Matrix::solve(cov[ , , j])
     for(i in 1:N){
       
-      logprobability = p/2 * log(det(Sigjinv) / (2 * pi)) -
+      logprobability = - p/2 * log(2 * p) + 0.5 * log(det(Sigjinv)) -
         0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
       val = val + r_ic[i, j] * logprobability #has to define
     }
