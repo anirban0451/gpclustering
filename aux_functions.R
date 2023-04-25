@@ -224,21 +224,42 @@ gmm.fromscratch.vecchia <- function(X, k, vecchia_obj, logProbs = TRUE){
 }
 
 #expected conditional log-likelihood
-elik = function(Ydata, k, r_ic, cov){
+elik = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA){
   
+  if(isTRUE(vecchia)){
+    if(is.na(vecchia_obj)){
+      stop("Expected likelihood with sparsity implementaion needs a proper vecchia_obj input.")
+    }
+  }
   N = nrow(Ydata); p = ncol(Ydata); G = k
   val = 0
-  for(j in 1:G){
+  if(vecchia){
     
-    #Sigjinv = Matrix::solve(cov[ , , j])
-    Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
-    for(i in 1:N){
+    for(j in 1:G){
       
-      logprobability = - p/2 * log(2 * p) + 
-        0.5 * log(FastGP::rcppeigen_get_det(Sigjinv)) -
-        0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
-      val = val + r_ic[i, j] * logprobability #has to define
-    }
+      Umatrix = getU(vecchia_obj = vecchia_obj, covmatrix = cov[ , , j])
+      for(i in 1:N){
+        
+        logprobability = - p/2 * log(2 * pi) + 
+          0.5 * sum(log(diag(Umatrix))) -
+          0.5 * crossprod(crossprod(U, t((Ydata[i, , drop = FALSE]))))
+        val = val + r_ic[i, j] * logprobability #has to define
+      }
+    } 
+  }else{
+    
+    for(j in 1:G){
+      
+      #Sigjinv = Matrix::solve(cov[ , , j])
+      Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
+      for(i in 1:N){
+        
+        logprobability = - p/2 * log(2 * pi) + 
+          0.5 * log(FastGP::rcppeigen_get_det(Sigjinv)) -
+          0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
+        val = val + r_ic[i, j] * logprobability #has to define
+      }
+    } 
   }
   return(val)
 }
@@ -321,6 +342,8 @@ de_dstdn = function(Ydata, wmat, Sigmaj, l, X, stdn){
   return(val)
 }
 
+##this function still does GP clustering implementation but with length-scale contributions
+##this function does not use standard implementation of EM clustering
 gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
                                l_f_interval = seq(0.3, 3, by = 0.1),
                                sig_f_interval = seq(0.5, 3.5, by = 0.1),
@@ -449,6 +472,148 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
     r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
     
     el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov)
+    Delta <- (el_m - el_mplusone)^2
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old))
+}
+
+##length-scale EM clustering with Vecchia implementation
+gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, seed = 1234, itern_em,
+                               l_f_interval = seq(0.3, 3, by = 0.1),
+                               sig_f_interval = seq(0.5, 3.5, by = 0.1),
+                               sig_n_interval = seq(0.5, 3.5, by = 0.1)){
+  
+  if(missing(vecchia_obj)){
+    stop("Please input a suitable object for the variable vecchia_obj.")
+  }
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  set.seed(seed)
+  while(Delta > 1e-4 && itern <= itermax){
+    # initiation
+    if(itern == 0){
+      #km.init <- km.fromscratch(Y, k)
+      #mu <- km.init$centroid; mu_mem <- mu
+      #w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      #w <- w/sum(w)
+      #cov <- array(dim = c(p, p, k))
+      #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+      #  1/n * sum((Y[km.init$cluster == c, i] - mu[c, i]) *
+      #              (Y[km.init$cluster == c, j] - mu[c, j]))
+      
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.8, max = 4) #GP cov parameter
+      sig_n_old = runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.5, max = 3.5) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = (sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, rep(0, p), cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, 0, cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik(Y, k, r_ic = r_ic, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj);
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    #mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+    #                                                     Y)))
+    #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+    #  1/n_c[c] * sum(r_ic[, c] * (Y[, i] - mu[c, i]) * r_ic[, c] *
+    #                   (Y[, j] - mu[c, j]))
+    
+    #el_m = el_mplusone; el_old = el_m
+    
+    #have to repeat three M steps: l_f, sig_f, sig_n
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      elik_array = c()
+      for(h in l_f_interval){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov, vecchia = TRUE, vecchia_obj = vecchia_obj))
+      }
+      l_f_old[cl] = l_f_interval[which.max(elik_array)]
+      remove(elik_array)
+      
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      elik_array = c()
+      for(h in sig_f_interval){
+        
+        cov[ , , cl] = 
+          (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov, vecchia = TRUE, vecchia_obj = vecchia_obj))
+      }
+      sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
+      remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      elik_array = c()
+      for(h in sig_n_interval){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov, vecchia = TRUE, vecchia_obj = vecchia_obj))
+      }
+      sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
+      remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, rep(0, p), cov[,, c], vecchia_obj, logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, 0, cov[,, c], vecchia_obj, logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj)
     Delta <- (el_m - el_mplusone)^2
     itern <- itern + 1;
   }
