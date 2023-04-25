@@ -50,7 +50,7 @@ mvn.pdf.i <- function(xi, mu, InvSigma, logval = TRUE){
   
   if(logval == FALSE){
     
-    return(sqrt(det(InvSigma)/ (2*pi)^length(xi)) * 
+    return(sqrt(FastGP::rcppeigen_get_det(InvSigma)/ (2*pi)^length(xi)) * 
              exp(-(1/2) * t(xi - mu) %*% InvSigma 
                  %*% (xi - mu)  )) 
   }else{
@@ -61,7 +61,8 @@ mvn.pdf.i <- function(xi, mu, InvSigma, logval = TRUE){
 }
 mvn.pdf <- function(X, mu, Sigma, logval = TRUE){
   
-  InvSigma = mvnorm.cov.inv.dup(Sigma)
+  #InvSigma = mvnorm.cov.inv.dup(Sigma)
+  InvSigma = FastGP::rcppeigen_invert_matrix(Sigma)
   return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigma, logval = logval)))
 }
   
@@ -229,10 +230,12 @@ elik = function(Ydata, k, r_ic, cov){
   val = 0
   for(j in 1:G){
     
-    Sigjinv = Matrix::solve(cov[ , , j])
+    #Sigjinv = Matrix::solve(cov[ , , j])
+    Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
     for(i in 1:N){
       
-      logprobability = - p/2 * log(2 * p) + 0.5 * log(det(Sigjinv)) -
+      logprobability = - p/2 * log(2 * p) + 
+        0.5 * log(FastGP::rcppeigen_get_det(Sigjinv)) -
         0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
       val = val + r_ic[i, j] * logprobability #has to define
     }
