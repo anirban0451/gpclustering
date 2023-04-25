@@ -223,7 +223,7 @@ gmm.fromscratch.vecchia <- function(X, k, vecchia_obj, logProbs = TRUE){
 }
 
 #expected conditional log-likelihood
-elik = function(Ydata, k, w, cov){
+elik = function(Ydata, k, r_ic, cov){
   
   N = nrow(Ydata); p = ncol(Ydata); G = k
   val = 0
@@ -234,7 +234,7 @@ elik = function(Ydata, k, w, cov){
       
       logprobability = p/2 * log(det(Sigjinv) / (2 * pi)) -
         0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
-      val = val + w[j] * logprobability #has to define
+      val = val + r_ic[i, j] * logprobability #has to define
     }
   }
   return(val)
@@ -352,23 +352,24 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
       sig_f_updates = cbind(sig_f_old)
       sig_n_updates = cbind(sig_n_old)
       
-      el_m = elik(Y, k, w, cov);
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, rep(0, p), cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, 0, cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik(Y, k, r_ic = r_ic, cov);
     }else{
       
       el_m = el_mplusone
     }
     
-    # E-step
-    if(logProbs == FALSE){
-      
-      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, rep(0, p), cov[,, c], logval = logProbs))
-    }else{
-      
-      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, 0, cov[,, c], logval = logProbs))
-      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
-    }
-    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
-    cluster = apply(r_ic, 1, which.max)
     
     #hyperparameter optimization
     # M-step
@@ -393,7 +394,7 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
         
         cov[ , , cl] = 
           (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
-        elik_array = append(elik_array, elik(Y, k, w, cov))
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov))
       }
       l_f_old[cl] = l_f_interval[which.max(elik_array)]
       remove(elik_array)
@@ -407,7 +408,7 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
         
         cov[ , , cl] = 
           (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
-        elik_array = append(elik_array, elik(Y, k, w, cov))
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov))
       }
       sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
       remove(elik_array)
@@ -420,7 +421,7 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
         
         cov[ , , cl] = 
           (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
-        elik_array = append(elik_array, elik(Y, k, w, cov))
+        elik_array = append(elik_array, elik(Y, k, r_ic, cov))
       }
       sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
       remove(elik_array)
@@ -433,7 +434,18 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
       cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
     }
     
-    el_mplusone = elik(Ydata = Y, w = w, k = k, cov = cov)
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, rep(0, p), cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, 0, cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov)
     Delta <- (el_m - el_mplusone)^2
     itern <- itern + 1;
   }

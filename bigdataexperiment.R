@@ -12,7 +12,7 @@ x_grid = 1:10#seq(-6, 6, length.out = p)
 
 
 #defining covariance matrix and creating samples
-X = x_grid #/ (max(x_grid) - min(x_grid))
+X = x_grid / (max(x_grid) - min(x_grid))
 cov_matrix_1 = sig_f[1]^2 * exp( - (fields::rdist(x_grid))^2/ l_f[1]^2) + diag(10^-10, length(x_grid))
 cov_matrix_2 = sig_f[2]^2 * exp( - (fields::rdist(x_grid))^2/ l_f[2]^2) + diag(10^-10, length(x_grid))
 cov1.chol = t(chol(cov_matrix_1))
