@@ -1,1 +1,15 @@
+NOAA National Centers for Environmental information, Climate at a Glance: Global Time Series, published June 2023, retrieved on June 19, 2023 from https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series
 
+The 12 bullet points correspond to the 12 months. We have monthly data on temperature anomaly for the years 1850-2022. It would probably be more sensible to look at data at various latitudes for a fixed month.
+(1) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/1/1850-2023/data.csv
+(2) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/2/1850-2023/data.csv
+(3) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/3/1850-2023/data.csv
+(4) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/4/1850-2023/data.csv
+(5) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/5/1850-2023/data.csv
+(6) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/6/1850-2023/data.csv
+(7) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/7/1850-2023/data.csv
+(8) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/8/1850-2023/data.csv
+(9) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/9/1850-2023/data.csv
+(10) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/10/1850-2023/data.csv
+(11) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/11/1850-2023/data.csv
+(12) https://www.ncei.noaa.gov/access/monitoring/climate-at-a-glance/global/time-series/10,0/land_ocean/1/12/1850-2023/data.csv
