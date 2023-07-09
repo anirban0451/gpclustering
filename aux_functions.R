@@ -26,6 +26,20 @@ km.fromscratch <- function(X, k){
   return(list(centroid = centroid, cluster = cluster))
 }
 
+
+cov.inv <- function(matrixObject){
+  
+  eigen_decomp = eigen(matrixObject)
+  logdet = sum(log(eigen_decomp$values))
+  U = eigen_decomp$vectors
+  inversmat = U %*% diag(1/eigen_decomp$values) %*% t(U)
+  returnvals = list()
+  returnvals$logdet = logdet
+  returnvals$invmat = inversmat
+  return(returnvals)
+}
+
+
 # Uses EM algorithm with multivariate normal
 # distribution to estimate cluster probability
 mvnorm.cov.inv <- function(Sigma) {
@@ -46,24 +60,25 @@ mvnorm.cov.inv.dup <- function(Sigma) {
 
 
 #multivariate Gaussian pdf
-mvn.pdf.i <- function(xi, mu, InvSigma, logval = TRUE){
+mvn.pdf.i <- function(xi, mu, InvSigmadetails, logval = TRUE){
   
   if(logval == FALSE){
     
-    return(sqrt(FastGP::rcppeigen_get_det(InvSigma)/ (2*pi)^length(xi)) * 
-             exp(-(1/2) * t(xi - mu) %*% InvSigma 
+    return(sqrt(Matrix::det(InvSigmadetails$invmat)/ (2*pi)^length(xi)) * 
+             exp(-(1/2) * t(xi - mu) %*% InvSigmadetails$invmat 
                  %*% (xi - mu)  )) 
   }else{
     
-    return(log(sqrt(det(InvSigma))) - (1/2) * t(xi - mu) %*% InvSigma 
+    logdet = InvSigmadetails$logdet
+    return(-0.5 * logdet - (1/2) * t(xi - mu) %*% InvSigmadetails$invmat
            %*% (xi - mu))
   }
 }
 mvn.pdf <- function(X, mu, Sigma, logval = TRUE){
   
   #InvSigma = mvnorm.cov.inv.dup(Sigma)
-  InvSigma = FastGP::rcppeigen_invert_matrix(Sigma)
-  return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigma, logval = logval)))
+  InvSigmadetails = cov.inv(Sigma)
+  return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigmadetails, logval = logval)))
 }
   
 gmm.fromscratch <- function(X, k, logProbs = FALSE){
@@ -250,14 +265,15 @@ elik = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA){
     
     for(j in 1:G){
       
-      Sigjinv = Matrix::solve(cov[ , , j])
+      Sigjinvdetails = cov.inv(cov[ , , j])
       #Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
       for(i in 1:N){
         
-        logprobability = - p/2 * log(2 * pi) + 
-          0.5 * log(#FastGP::rcppeigen_get_det
-            det(Sigjinv)) -
-          0.5 * (Ydata[i, , drop = FALSE]) %*% Sigjinv %*% t(Ydata[i, , drop = FALSE]) 
+        logprobability = - p/2 * log(2 * pi) - 
+          0.5 * Sigjinvdetails$logdet -
+          0.5 * (Ydata[i, , drop = FALSE]) %*% 
+          Sigjinvdetails$invmat %*% t(Ydata[i, , drop = FALSE]) 
+        
         val = val + r_ic[i, j] * logprobability #has to define
       }
     } 
@@ -371,7 +387,8 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
       set.seed(seed)
       w = rep(1/k, k)
       sig_f_old = runif(k, min = 0.8, max = 4) #GP cov parameter
-      sig_n_old = runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
+      sig_n_old = rep(0.05, k)
+        #runif(k, min = 0.05, max = 0.2) #noise parameter of GP kernel
       l_f_old = runif(k, min = 0.5, max = 3.5) #length-scale parameter of GP cov
       cov = array(dim = c(dim(distmat), k))
       for(i in 1:k) cov[ , , i] = (sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
@@ -469,18 +486,18 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
         (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
       
       #sig_n optimization
-      sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
-        
-        cov[ , , cl] = 
-          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
-        val = elik(Y, k, r_ic, cov)
-        return(-val)
-      }
+      #sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+      #  val = elik(Y, k, r_ic, cov)
+      #  return(-val)
+      #}
       
-      sig_n_old[cl] =
-        (optim(par = 0.3, fn = sig_n_optim_func,
-                     cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
-                     p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.6))$par
+      sig_n_old[cl] = 0.05
+      #  (optim(par = 0.3, fn = sig_n_optim_func,
+      #               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.6))$par
       
       #elik_array = c()
       #for(h in sig_n_interval){
@@ -538,6 +555,8 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
   p <- ncol(Y)  # number of parameters
   n <- nrow(Y)  # number of observations
   Delta <- 1; itern <- 0; itermax <- itern_em
+  l_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
+  sig_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
   while(isTRUE(#Delta > 1e-4 && 
     itern <= itermax)){
     # initiation
@@ -554,7 +573,7 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
       set.seed(seed)
       w = rep(1/k, k)
       sig_f_old = runif(k, min = 0.8, max = 4) #GP cov parameter
-      sig_n_old = runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
+      sig_n_old = rep(0.05, k)#runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
       l_f_old = runif(k, min = 0.5, max = 3.5) #length-scale parameter of GP cov
       cov = array(dim = c(dim(distmat), k))
       for(i in 1:k) cov[ , , i] = (sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
@@ -654,19 +673,19 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
         (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
       
       #sig_n optimization
-      sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old, vecchia = TRUE, vecchia_obj){
+      #sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old, vecchia = TRUE, vecchia_obj){
         
-        cov[ , , cl] = 
-          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
-        val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj)
-        return(-val)
-      }
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+      #  val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj)
+      #  return(-val)
+      #}
       
-      sig_n_old[cl] =
-        (optim(par = 0.3, fn = sig_n_optim_func,
-               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
-               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, vecchia_obj = vecchia_obj,
-               lower = 0.1, upper = 0.6))$par
+      sig_n_old[cl] = 0.05
+      #  (optim(par = 0.3, fn = sig_n_optim_func,
+      #         cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #         p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, vecchia_obj = vecchia_obj,
+      #         lower = 0.1, upper = 0.6))$par
       
       #elik_array = c()
       #for(h in sig_n_interval){
@@ -699,6 +718,9 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
     
     el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj)
     Delta <- (el_m - el_mplusone)^2
+    
+    l_f_hist[itern + 1, ] = l_f_old
+    sig_f_hist[itern + 1, ] = sig_f_old
     itern <- itern + 1;
   }
   return(list(softcluster = r_ic, 
@@ -706,5 +728,7 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
               l_f = l_f_old,
               sig_f = sig_f_old,
               sig_n = sig_n_old,
+              l_f_hist = l_f_hist,
+              sig_f_hist = sig_f_hist,
               itern = itern))
 }
