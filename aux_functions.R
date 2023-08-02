@@ -732,3 +732,44 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
               sig_f_hist = sig_f_hist,
               itern = itern))
 }
+
+
+adj_matrix = function(clustlabel){
+  
+  n = length(clustlabel)
+  A = matrix(0, nrow = n, ncol = n)
+  
+  for(i in 1:(n - 1)){
+    
+    for(j in 2:n){
+      
+      if(isTRUE(clustlabel[i] != clustlabel[j])){
+        A[i, j] = 1
+      }
+      A[j, i] = A[i, j]
+    }
+  }
+  return(A)
+}
+
+ratemisclass <- function(clusterA, clusterB){
+  
+  n = length(clusterA)
+  misclasA = 0
+  warning("This code is written with two clusters in mind.")
+  
+  i = 1
+  
+  clArelabel = clBrelabel = rep(NA, n)
+  clArelabel[i] = clBrelabel[i] = 1
+  
+  sameclustersA = which(clusterA == clusterA[i])
+  clArelabel[sameclustersA] = 1
+  clArelabel[setdiff(1:n, sameclustersA)] = 2
+  
+  sameclustersB = which(clusterB == clusterB[i])
+  clBrelabel[sameclustersB] = 1
+  clBrelabel[setdiff(1:n, sameclustersB)] = 2
+  
+  return(sum(clArelabel != clBrelabel)/n)
+}

@@ -63,3 +63,40 @@ for(i in 1:nrow(sig_f_matrix)){
 
 save(clustertime_veccs, clusterdata_veccs, clusterdata_full, clustertime,
      file = "origvsvecchia.Rdata")
+
+misclasfull = array(dim = c(2, replicates))
+for(i in 1:2){
+  for(j in 1:replicates){
+    
+    misclasfull[i, j] = ratemisclass(clusterA = clusterdata_full[i, j, ], 
+                                     clusterB = rep(1:2, each = nsamp))
+  }
+}
+
+misclasvecchia = array(dim = c(2, replicates, length(mvecchia)))
+
+for(i in 1:2){
+  
+  for(j in 1:replicates){
+    
+    for(k in 1:length(mvecchia)){
+      
+      misclasvecchia[i, j, k] = ratemisclass(clusterA = clusterdata_veccs[i, j, k, ],
+                                            clusterB = rep(1:2, each = nsamp))
+    }
+  }
+}
+
+groups = as.factor(rep(1:4, each = replicates))
+
+y = c(misclasfull[1, ],c( misclasvecchia[1, , ]))
+
+pdf("boxplot_case1.pdf")
+boxplot(y ~ groups, main = "Original vs Vecchia")
+dev.off()
+
+y = c(misclasfull[2, ],c( misclasvecchia[2, , ]))
+
+pdf("boxplot_case2.pdf")
+boxplot(y ~ groups, main = "Original vs Vecchia")
+dev.off()
