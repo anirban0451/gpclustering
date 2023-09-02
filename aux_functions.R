@@ -39,6 +39,16 @@ cov.inv <- function(matrixObject){
   return(returnvals)
 }
 
+cov.inv2 <- function(matrixObject){
+  
+  inversmat = t(chol(matrixObject))
+  logdet = 2 * sum(log(diag(inversmat)))
+  returnvals = list()
+  returnvals$logdet = logdet
+  returnvals$invmat = solve(matrixObject)
+  return(returnvals)
+}
+
 
 # Uses EM algorithm with multivariate normal
 # distribution to estimate cluster probability
@@ -78,6 +88,13 @@ mvn.pdf <- function(X, mu, Sigma, logval = TRUE){
   
   #InvSigma = mvnorm.cov.inv.dup(Sigma)
   InvSigmadetails = cov.inv(Sigma)
+  return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigmadetails, logval = logval)))
+}
+
+mvn.pdf2 <- function(X, mu, Sigma, logval = TRUE){
+  
+  #InvSigma = mvnorm.cov.inv.dup(Sigma)
+  InvSigmadetails = cov.inv2(Sigma)
   return(apply(X, 1, function(xi) mvn.pdf.i(as.numeric(xi), mu, InvSigmadetails, logval = logval)))
 }
   
@@ -239,7 +256,7 @@ gmm.fromscratch.vecchia <- function(X, k, vecchia_obj, logProbs = TRUE){
 }
 
 #expected conditional log-likelihood
-elik = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA){
+elik = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA, means){
   
   #if(isTRUE(vecchia)){
   #  if(is.na(vecchia_obj)){
@@ -266,6 +283,48 @@ elik = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA){
     for(j in 1:G){
       
       Sigjinvdetails = cov.inv(cov[ , , j])
+      #Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
+      for(i in 1:N){
+        
+        logprobability = - p/2 * log(2 * pi) - 
+          0.5 * Sigjinvdetails$logdet -
+          0.5 * (Ydata[i, , drop = FALSE] - means[j, , drop = FALSE]) %*% 
+          Sigjinvdetails$invmat %*% t(Ydata[i, , drop = FALSE] - means[j, , drop = FALSE]) 
+        
+        val = val + r_ic[i, j] * logprobability #has to define
+      }
+    } 
+  }
+  return(val)
+}
+
+elik2 = function(Ydata, k, r_ic, cov, vecchia = FALSE, vecchia_obj = NA){
+  
+  #if(isTRUE(vecchia)){
+  #  if(is.na(vecchia_obj)){
+  #    stop("Expected likelihood with sparsity implementaion needs a proper vecchia_obj input.")
+  #  }
+  #}
+  N = nrow(Ydata); p = ncol(Ydata); G = k
+  val = 0
+  if(vecchia){
+    
+    for(j in 1:G){
+      
+      Umatrix = getU(vecchia_obj = vecchia_obj, covmatrix = cov[ , , j])
+      for(i in 1:N){
+        
+        logprobability = - p/2 * log(2 * pi) + 
+          0.5 * sum(log(diag(Umatrix))) -
+          0.5 * crossprod(crossprod(Umatrix, t((Ydata[i, , drop = FALSE]))))
+        val = val + r_ic[i, j] * logprobability #has to define
+      }
+    } 
+  }else{
+    
+    for(j in 1:G){
+      
+      Sigjinvdetails = cov.inv2(cov[ , , j])
       #Sigjinv = FastGP::rcppeigen_invert_matrix(cov[ , , j])
       for(i in 1:N){
         
@@ -541,6 +600,760 @@ gmm.fromscratch.v2 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
               itern = itern))
 }
 
+#does matrix inversion in a different way
+gmm.fromscratch.v3 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
+                               l_f_interval = seq(0.3, 3, by = 0.2),
+                               sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                               sig_n_interval = seq(0.5, 3.5, by = 0.2)){
+  
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  while(isTRUE(#Delta > 1e-4 &&
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      #km.init <- km.fromscratch(Y, k)
+      #mu <- km.init$centroid; mu_mem <- mu
+      #w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      #w <- w/sum(w)
+      #cov <- array(dim = c(p, p, k))
+      #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+      #  1/n * sum((Y[km.init$cluster == c, i] - mu[c, i]) *
+      #              (Y[km.init$cluster == c, j] - mu[c, j]))
+      
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.8, max = 4) #GP cov parameter
+      sig_n_old = rep(0.05, k)
+      #runif(k, min = 0.05, max = 0.2) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.5, max = 3.5) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = (sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf2(Y, rep(0, p), cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf2(Y, 0, cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik2(Y, k, r_ic = r_ic, cov);
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    #mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+    #                                                     Y)))
+    #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+    #  1/n_c[c] * sum(r_ic[, c] * (Y[, i] - mu[c, i]) * r_ic[, c] *
+    #                   (Y[, j] - mu[c, j]))
+    
+    #el_m = el_mplusone; el_old = el_m
+    
+    #have to repeat three M steps: l_f, sig_f, sig_n
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik2(Y, k, r_ic, cov)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.3, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, lower = 0.1, upper = 5))$par
+      #elik_array = c()
+      #for(h in l_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #l_f_old[cl] = l_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          (x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik2(Y, k, r_ic, cov)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 0.3, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, lower = 0.1, upper = 0.6))$par
+      
+      #elik_array = c()
+      #for(h in sig_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      #sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+      #  val = elik(Y, k, r_ic, cov)
+      #  return(-val)
+      #}
+      
+      sig_n_old[cl] = 0.05
+      #  (optim(par = 0.3, fn = sig_n_optim_func,
+      #               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.6))$par
+      
+      #elik_array = c()
+      #for(h in sig_n_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf2(Y, rep(0, p), cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf2(Y, 0, cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik2(Ydata = Y, r_ic = r_ic, k = k, cov = cov)
+    Delta <- (el_m - el_mplusone)^2
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              w = w,
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              itern = itern))
+}
+
+#estimate sigma_n^2 as well
+gmm.fromscratch.v4 <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
+                               l_f_interval = seq(0.3, 3, by = 0.2),
+                               sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                               sig_n_interval = seq(0.5, 3.5, by = 0.2)){
+  
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  while(isTRUE(#Delta > 1e-4 &&
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      km.init <- kmeans(Y, k)
+      km.means <- km.init$centers
+      #mu <- km.init$centroid; mu_mem <- mu
+      #w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      #w <- w/sum(w)
+      #cov <- array(dim = c(p, p, k))
+      #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+      #  1/n * sum((Y[km.init$cluster == c, i] - mu[c, i]) *
+      #              (Y[km.init$cluster == c, j] - mu[c, j]))
+      
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = c(1, 1)#runif(k, min = 0.2, max = 0.5) #GP cov parameter
+      sig_n_old = rep(0.1, k)
+      #runif(k, min = 0.05, max = 0.2) #noise parameter of GP kernel
+      l_f_old = c(0.3, 0.3)#runif(k, min = 0.2, max = 0.5) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = (sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik(Y, k, r_ic = r_ic, cov, means = km.means);
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    #mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+    #                                                     Y)))
+    #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+    #  1/n_c[c] * sum(r_ic[, c] * (Y[, i] - mu[c, i]) * r_ic[, c] *
+    #                   (Y[, j] - mu[c, j]))
+    
+    #el_m = el_mplusone; el_old = el_m
+    
+    #have to repeat three M steps: l_f, sig_f, sig_n
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.3, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, lower = 0.25, upper = 0.45))$par
+      #elik_array = c()
+      #for(h in l_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #l_f_old[cl] = l_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          (x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 1, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, lower = 0.8, upper = 2))$par
+      
+      #elik_array = c()
+      #for(h in sig_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_n_old[cl] = 0.1#0.05
+      #  (optim(par = 4, fn = sig_n_optim_func,
+      #               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.3))$par
+     
+      #elik_array = c()
+      #for(h in sig_n_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, rep(0, p), cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, 0, cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, means = km.means)
+    Delta <- (el_m - el_mplusone)^2
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, ),
+              w = w,
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              itern = itern))
+}
+
+
+
+gmm.fromscratch.v1.Matern <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
+                               l_f_interval = seq(0.3, 3, by = 0.2),
+                               sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                               sig_n_interval = seq(0.5, 3.5, by = 0.2)){
+  
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  while(isTRUE(#Delta > 1e-4 &&
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      km.init <- kmeans(Y, k)
+      #km.means <- matrix(0, nrow = k, ncol = p)
+      km.means <- km.init$centers
+      #mu <- km.init$centroid; mu_mem <- mu
+      #w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      #w <- w/sum(w)
+      #cov <- array(dim = c(p, p, k))
+      #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+      #  1/n * sum((Y[km.init$cluster == c, i] - mu[c, i]) *
+      #              (Y[km.init$cluster == c, j] - mu[c, j]))
+      
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.2, max = 1.5) #GP cov parameter
+      sig_n_old = rep(0.1, k)
+      #runif(k, min = 0.05, max = 0.2) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.001, max = 0.01) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5) #exp( - distmat^2/(2 * l_f_old[i]^2))
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = as.numeric(elik(Y, k, r_ic = r_ic, cov, means = km.means))
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    #cluster = apply(r_ic, 1, which.max)
+    #for(t in 1:k){
+    #  km.means[t, ] = colMeans(Y[which(cluster == t), ])
+    #}
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    #mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+    #                                                     Y)))
+    #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+    #  1/n_c[c] * sum(r_ic[, c] * (Y[, i] - mu[c, i]) * r_ic[, c] *
+    #                   (Y[, j] - mu[c, j]))
+    
+    #el_m = el_mplusone; el_old = el_m
+    
+    #have to repeat three M steps: l_f, sig_f, sig_n
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = x, nu = .5)
+          #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.005, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, lower = 0.001, upper = 0.01, method = "Brent"))$par
+      #elik_array = c()
+      #for(h in l_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #l_f_old[cl] = l_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (x)^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+          #(x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 0.5, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, lower = 0.2, upper = 1.5, method = "Brent"))$par
+      
+      #elik_array = c()
+      #for(h in sig_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_n_old[cl] = 0.1#0.05
+      #  (optim(par = 4, fn = sig_n_optim_func,
+      #               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.3))$par
+      
+      #elik_array = c()
+      #for(h in sig_n_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c,], cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c,], cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    if(any(is.nan(mvn.c))){break}
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, means = km.means)
+    Delta <- (el_m - el_mplusone)^2
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              w = w,
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              itern = itern))
+}
+
+gmm.fromscratch.v2.Matern <- function(X, Y, k, logProbs = TRUE, seed = 1234, itern_em,
+                                      l_f_interval = seq(0.3, 3, by = 0.2),
+                                      sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                                      sig_n_interval = seq(0.5, 3.5, by = 0.2)){
+  
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  while(isTRUE(#Delta > 1e-4 &&
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      km.init <- kmeans(Y, k)
+      km.means <- matrix(0, nrow = k, ncol = p)
+      #km.means <- km.init$centers
+      #mu <- km.init$centroid; mu_mem <- mu
+      #w <- sapply(1:k, function(i) length(which(km.init$cluster == i)))
+      #w <- w/sum(w)
+      #cov <- array(dim = c(p, p, k))
+      #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <- 
+      #  1/n * sum((Y[km.init$cluster == c, i] - mu[c, i]) *
+      #              (Y[km.init$cluster == c, j] - mu[c, j]))
+      
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.2, max = 1.5) #GP cov parameter
+      sig_n_old = rep(0.1, k)
+      #runif(k, min = 0.05, max = 0.2) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.001, max = 0.01) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5) #exp( - distmat^2/(2 * l_f_old[i]^2))
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c, ], cov[,, c], logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = as.numeric(elik(Y, k, r_ic = r_ic, cov, means = km.means))
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    cluster = apply(r_ic, 1, which.max)
+    for(t in 1:k){
+      km.means[t, ] = colMeans(Y[which(cluster == t), ])
+    }
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    #mu <- t(sapply(1:k, function(c) 1/n_c[c] * colSums(r_ic[, c] *
+    #                                                     Y)))
+    #for(i in 1:p) for(j in 1:p) for(c in 1:k) cov[i, j, c] <-
+    #  1/n_c[c] * sum(r_ic[, c] * (Y[, i] - mu[c, i]) * r_ic[, c] *
+    #                   (Y[, j] - mu[c, j]))
+    
+    #el_m = el_mplusone; el_old = el_m
+    
+    #have to repeat three M steps: l_f, sig_f, sig_n
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = x, nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.005, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, lower = 0.001, upper = 0.01, method = "Brent"))$par
+      #elik_array = c()
+      #for(h in l_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * h^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #l_f_old[cl] = l_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (x)^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 0.5, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, lower = 0.2, upper = 1.5, method = "Brent"))$par
+      
+      #elik_array = c()
+      #for(h in sig_f_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (h)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_f_old[cl] = sig_f_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old){
+        
+        cov[ , , cl] = 
+          (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+        val = elik(Y, k, r_ic, cov, means = km.means)
+        return(-val)
+      }
+      
+      sig_n_old[cl] = 0.1#0.05
+      #  (optim(par = 4, fn = sig_n_optim_func,
+      #               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #               p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, lower = 0.1, upper = 0.3))$par
+      
+      #elik_array = c()
+      #for(h in sig_n_interval){
+      #  
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(h^2, p)
+      #  elik_array = append(elik_array, elik(Y, k, r_ic, cov))
+      #}
+      #sig_n_old[cl] = sig_n_interval[which.max(elik_array)]
+      #remove(elik_array)
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #cov[ , , cl] = (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c,], cov[,, c], logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf(Y, km.means[c,], cov[,, c], logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    if(any(is.nan(mvn.c))){break}
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, means = km.means)
+    Delta <- (el_m - el_mplusone)^2
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              w = w,
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              itern = itern))
+}
+
+
+
+
 ##length-scale EM clustering with Vecchia implementation
 gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, seed = 1234, itern_em,
                                l_f_interval = seq(0.3, 3, by = 0.2),
@@ -734,42 +1547,323 @@ gmm.fromscratch.v2.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, se
 }
 
 
-adj_matrix = function(clustlabel){
+gmm..v1.Matern.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, seed = 1234, itern_em,
+                                       l_f_interval = seq(0.3, 3, by = 0.2),
+                                       sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                                       sig_n_interval = seq(0.5, 3.5, by = 0.2)){
   
-  n = length(clustlabel)
-  A = matrix(0, nrow = n, ncol = n)
-  
-  for(i in 1:(n - 1)){
-    
-    for(j in 2:n){
-      
-      if(isTRUE(clustlabel[i] != clustlabel[j])){
-        A[i, j] = 1
-      }
-      A[j, i] = A[i, j]
-    }
+  if(missing(vecchia_obj)){
+    stop("Please input a suitable object for the variable vecchia_obj.")
   }
-  return(A)
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  l_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
+  sig_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
+  while(isTRUE(#Delta > 1e-4 && 
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      #km.means = matrix(0, nrow = k, ncol = p)
+      km.init = kmeans(Y, k)
+      km.means = km.init$centers
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.2, max = 1.5) #GP cov parameter
+      sig_n_old = rep(0.1, k)#runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.001, max = 0.01) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)#(sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik(Y, k, r_ic = r_ic, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj, means = km.means);
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old, vecchia = TRUE, vecchia_obj){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = x, nu = .5)
+          #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj, means = km.means)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.3, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, vecchia_obj = vecchia_obj, 
+               lower = 0.001, upper = 0.01, method = "Brent"))$par
+      
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old, vecchia = TRUE, vecchia_obj){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (x)^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+          #(x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj, means = km.means)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 0.3, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, vecchia_obj = vecchia_obj,
+               lower = 0.2, upper = 1.5, method = "Brent"))$par
+      
+      
+      cov[ , , cl] =
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      #sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old, vecchia = TRUE, vecchia_obj){
+      
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+      #  val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj)
+      #  return(-val)
+      #}
+      
+      sig_n_old[cl] = 0.1
+      #  (optim(par = 0.3, fn = sig_n_optim_func,
+      #         cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #         p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, vecchia_obj = vecchia_obj,
+      #         lower = 0.1, upper = 0.6))$par
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      cov[ , , cl] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)#(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj)
+    Delta <- (el_m - el_mplusone)^2
+    
+    l_f_hist[itern + 1, ] = l_f_old
+    sig_f_hist[itern + 1, ] = sig_f_old
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              l_f_hist = l_f_hist,
+              sig_f_hist = sig_f_hist,
+              itern = itern))
 }
 
-ratemisclass <- function(clusterA, clusterB){
+
+gmm..v2.Matern.vecchia <- function(X, Y, k, vecchia_obj, logProbs = TRUE, seed = 1234, itern_em,
+                                   l_f_interval = seq(0.3, 3, by = 0.2),
+                                   sig_f_interval = seq(0.5, 3.5, by = 0.2),
+                                   sig_n_interval = seq(0.5, 3.5, by = 0.2)){
   
-  n = length(clusterA)
-  misclasA = 0
-  warning("This code is written with two clusters in mind.")
-  
-  i = 1
-  
-  clArelabel = clBrelabel = rep(NA, n)
-  clArelabel[i] = clBrelabel[i] = 1
-  
-  sameclustersA = which(clusterA == clusterA[i])
-  clArelabel[sameclustersA] = 1
-  clArelabel[setdiff(1:n, sameclustersA)] = 2
-  
-  sameclustersB = which(clusterB == clusterB[i])
-  clBrelabel[sameclustersB] = 1
-  clBrelabel[setdiff(1:n, sameclustersB)] = 2
-  
-  return(sum(clArelabel != clBrelabel)/n)
+  if(missing(vecchia_obj)){
+    stop("Please input a suitable object for the variable vecchia_obj.")
+  }
+  distmat = fields::rdist(matrix(X))
+  #this function separates clusters of GP using the length-scale and variance information
+  p <- ncol(Y)  # number of parameters
+  n <- nrow(Y)  # number of observations
+  Delta <- 1; itern <- 0; itermax <- itern_em
+  l_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
+  sig_f_hist = matrix(0.0, ncol = k, nrow = itermax + 1)
+  while(isTRUE(#Delta > 1e-4 && 
+    itern <= itermax)){
+    # initiation
+    if(itern == 0){
+      km.means = matrix(0, nrow = k, ncol = p)
+      #km.init = kmeans(Y, k)
+      #km.means = km.init$centers
+      set.seed(seed)
+      w = rep(1/k, k)
+      sig_f_old = runif(k, min = 0.2, max = 1.5) #GP cov parameter
+      sig_n_old = rep(0.1, k)#runif(k, min = 0.1, max = 1) #noise parameter of GP kernel
+      l_f_old = runif(k, min = 0.001, max = 0.01) #length-scale parameter of GP cov
+      cov = array(dim = c(dim(distmat), k))
+      for(i in 1:k) cov[ , , i] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)#(sig_f_old[i])^2 * exp( - distmat^2/(2 * l_f_old[i]^2)) + diag(sig_n_old[i]^2, p)
+      #this completes the parameter initialization
+      l_f_updates = cbind(l_f_old)
+      sig_f_updates = cbind(sig_f_old)
+      sig_n_updates = cbind(sig_n_old)
+      
+      
+      # E-step
+      if(logProbs == FALSE){
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+      }else{
+        
+        mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+        mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+      }
+      r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+      
+      el_m = elik(Y, k, r_ic = r_ic, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj, means = km.means);
+    }else{
+      
+      el_m = el_mplusone
+    }
+    
+    
+    #hyperparameter optimization
+    # M-step
+    n_c <- colSums(r_ic)
+    w <- n_c/sum(n_c)
+    
+    cluster = apply(r_ic, 1, which.max)
+    for(t in 1:k){
+      km.means[t, ] = colMeans(Y[which(cluster == t), ])
+    }
+    
+    
+    #doing optimization for l_f
+    for(cl in 1:k){
+      
+      #l_f optimization
+      l_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, sig_f_old, sig_n_old, vecchia = TRUE, vecchia_obj){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = x, nu = .5)
+        #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * x^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj, means = km.means)
+        return(-val)
+      }
+      
+      l_f_old[cl] =
+        (optim(par = 0.3, fn = l_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, sig_f_old = sig_f_old, sig_n_old = sig_n_old, vecchia_obj = vecchia_obj, 
+               lower = 0.001, upper = 0.01, method = "Brent"))$par
+      
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_f optimization
+      sig_f_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_n_old, vecchia = TRUE, vecchia_obj){
+        
+        cov[ , , cl] = 
+          diag(sig_n_old[i]^2, p) + (x)^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+        #(x)^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+        val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj, means = km.means)
+        return(-val)
+      }
+      
+      sig_f_old[cl] =
+        (optim(par = 0.3, fn = sig_f_optim_func,
+               cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+               p = p, k = k, l_f_old = l_f_old, sig_n_old = sig_n_old, vecchia_obj = vecchia_obj,
+               lower = 0.2, upper = 1.5, method = "Brent"))$par
+      
+      
+      cov[ , , cl] =
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+      
+      #sig_n optimization
+      #sig_n_optim_func = function(x, cl, distmat, Y, r_ic, cov, p, k, l_f_old, sig_f_old, vecchia = TRUE, vecchia_obj){
+      
+      #  cov[ , , cl] = 
+      #    (sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(x^2, p)
+      #  val = elik(Y, k, r_ic, cov, vecchia = vecchia, vecchia_obj = vecchia_obj)
+      #  return(-val)
+      #}
+      
+      sig_n_old[cl] = 0.1
+      #  (optim(par = 0.3, fn = sig_n_optim_func,
+      #         cl = cl, distmat = distmat, Y = Y, r_ic = r_ic, cov = cov, 
+      #         p = p, k = k, l_f_old = l_f_old, sig_f_old = sig_f_old, vecchia_obj = vecchia_obj,
+      #         lower = 0.1, upper = 0.6))$par
+      
+      cov[ , , cl] = 
+        diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)
+      #(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    for(cl in 1:k){
+      
+      cov[ , , cl] = diag(sig_n_old[i]^2, p) + (sig_f_old[i])^2 * Matern(distmat, range = l_f_old[i], nu = .5)#(sig_f_old[cl])^2 * exp( - distmat^2/(2 * l_f_old[cl]^2)) + diag(sig_n_old[cl]^2, p)
+    }
+    
+    # E-step
+    if(logProbs == FALSE){
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+    }else{
+      
+      mvn.c <- sapply(1:k, function(c) mvn.pdf.vecchia(Y, km.means[c, ], cov[,, c], vecchia_obj, logval = logProbs))
+      mvn.c <- t(apply(mvn.c, 1, FUN = function(x) exp(x - max(x))))
+    }
+    if(any(is.nan(mvn.c))){break}
+    r_ic <- t(w*t(mvn.c)) / rowSums(t(w*t(mvn.c)))
+    
+    el_mplusone = elik(Ydata = Y, r_ic = r_ic, k = k, cov = cov, vecchia = TRUE, vecchia_obj = vecchia_obj)
+    Delta <- (el_m - el_mplusone)^2
+    
+    l_f_hist[itern + 1, ] = l_f_old
+    sig_f_hist[itern + 1, ] = sig_f_old
+    itern <- itern + 1;
+  }
+  return(list(softcluster = r_ic, 
+              cluster = apply(r_ic, 1, which.max),
+              l_f = l_f_old,
+              sig_f = sig_f_old,
+              sig_n = sig_n_old,
+              l_f_hist = l_f_hist,
+              sig_f_hist = sig_f_hist,
+              itern = itern))
 }

@@ -2,8 +2,8 @@ source("aux_functions.R")
 
 
 ##creating two potential GP structures
-p = 100; nsamp = 10 #we assume that the data is from R^p
-l_f = c(0.2, 0.5); sig_f = c(0.5, 0.2) 
+p = 300; nsamp = 10 #we assume that the data is from R^p
+l_f = c(0.2, 0.5); sig_f = c(0.2, 0.5) 
 x_grid = seq(-6, 6, length.out = p)
 
 #f1_mean = cos(x_grid)
@@ -33,14 +33,14 @@ matplot(x = x_grid, y = t(sample_collection),
 
 ##gpclustering
 proc.time() -> start.time
-cl_data = gmm.fromscratch.v2(X = X, Y = sample_collection, k = 2, itern_em = 300)
+cl_data = gmm.fromscratch.v2(X = X, Y = sample_collection, k = 2, itern_em = 10)
 end.time <- proc.time()
 
 end.time - start.time
 
 ##vecchia setup--------------------------------------
 seed = 1234
-set.seed(seed); m = p
+set.seed(seed); m = floor(p/12)
 #ordered_indices = sample.int(p, size = p) 
 #needed for vecchia, in general no fixed ordering
 orgordering = 1:p; locs = 1:p/p 
@@ -55,9 +55,13 @@ vecchialocspecs = getLocsVecchia(locs = matrix(locs), ordering = "maxmin", m = m
 
 start.time <- proc.time()
 cl_data = gmm.fromscratch.v2(X = X[vecchialocspecs$MatchOrigtoPerms], Y = sample_collection[ , vecchialocspecs$MatchOrigtoPerms], 
-                             k = 2, itern_em = 300)
+                             k = 2, itern_em = 100)
+end.time <- proc.time()
+end.time - start.time
+
+start.time <- proc.time()
 cl_data_vecchia = gmm.fromscratch.v2.vecchia(X = X[vecchialocspecs$MatchOrigtoPerms], Y = sample_collection[ , vecchialocspecs$MatchOrigtoPerms], 
-                                     k = 2, itern_em = 300, vecchia_obj = vecchialocspecs$vecchia_obj)
+                                     k = 2, itern_em = 100, vecchia_obj = vecchialocspecs$vecchia_obj)
 end.time <- proc.time()
 end.time - start.time
 
